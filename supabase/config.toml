@@ -1,0 +1,21 @@
+project_id = "cambio-classic"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+
+[db]
+port = 54322
+major_version = 15
+
+[auth]
+enabled = true
+site_url = "http://localhost:5173"
+enable_anonymous_sign_ins = true
+
+[functions.game]
+# The handler verifies the user's bearer token with auth.getUser on EVERY request.
+# Disabling the legacy gateway check supports modern publishable keys.
+verify_jwt = false

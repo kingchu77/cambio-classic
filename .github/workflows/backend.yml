@@ -1,0 +1,32 @@
+name: Deploy Supabase backend
+on: workflow_dispatch
+permissions:
+  contents: read
+concurrency:
+  group: backend-production
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: supabase-production
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.122.0
+      - name: Link selected project
+        run: supabase link --project-ref "$SUPABASE_PROJECT_REF"
+      - name: Apply additive schema migrations
+        run: supabase db push
+      - name: Deploy authenticated game handler
+        run: supabase functions deploy game --project-ref "$SUPABASE_PROJECT_REF"

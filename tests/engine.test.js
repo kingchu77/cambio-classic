@@ -31,6 +31,49 @@ function drawPlay(g, c, now = 2000) {
 }
 const fails = (fn, code) => assert.throws(fn, (e) => e.code === code);
 
+test("draw and discard swaps publish the same public movement to both seats without hidden faces", () => {
+  for (const source of ["deck", "discard"]) {
+    let g = fixture();
+    g.hands[0][1].card = C(7);
+    g[source === "deck" ? "deck" : "discard"].push(C(13, "♥"));
+    const target = g.hands[0][1].id;
+    g = apply(g, U[0], { type: "draw", source }, 2000);
+    g = apply(g, U[0], { type: "swap", card: target }, 2100);
+    const a = view(g, U[0], 10, "ABCDEFGHJK", 2100);
+    const b = view(g, U[1], 10, "ABCDEFGHJK", 2100);
+    assert.deepEqual(a.motion, b.motion);
+    assert.deepEqual(a.motion, {
+      id: g.motion.id, at: 2100, kind: "draw-swap", player: 0, source,
+      targets: [{ owner: 0, card: target, index: 1 }],
+    });
+    assert.ok(a.motion.id);
+    assert.ok(a.hands.flat().every((slot) => !slot.card));
+    assert.ok(b.hands.flat().every((slot) => !slot.card));
+    assert.deepEqual(b.discard, C(7));
+    assert.deepEqual(apply(g, U[1], { type: "sync" }, 2200).motion, g.motion);
+  }
+});
+
+test("Black King movement identifies both face-down slots and survives later announcements", () => {
+  let g = fixture();
+  g = drawPlay(g, C(13), 2000);
+  const a = { owner: 0, card: g.hands[0][1].id };
+  const b = { owner: 1, card: g.hands[1][2].id };
+  g = apply(g, U[0], { type: "ability-swap", a, b }, 2100);
+  const motion = structuredClone(g.motion);
+  assert.deepEqual(motion, {
+    id: motion.id, at: 2100, kind: "blind-swap", player: 0,
+    targets: [{ ...a, index: 1 }, { ...b, index: 2 }],
+  });
+  for (const uid of U) {
+    const projection = view(g, uid, 10, "ABCDEFGHJK", 2100);
+    assert.deepEqual(projection.motion, motion);
+    assert.ok(projection.hands.flat().every((slot) => !slot.card));
+  }
+  g = apply(g, U[1], { type: "draw", source: "deck" }, 9000);
+  assert.deepEqual(g.motion, motion, "polling must still recover the last swap after another announcement");
+});
+
 test("54-card deck, two jokers; scoring and abilities exactly follow confirmed rules", () => {
   const d = deck();
   assert.equal(d.length, 54);

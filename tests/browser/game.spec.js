@@ -27,6 +27,54 @@ async function resolveAbility(page) {
     await page.locator("#ability-done").click();
   }
 }
+
+test("both players see deck and discard swap origins and the replaced slot", async ({ browser, baseURL }, testInfo) => {
+  const contextA = await browser.newContext(testInfo.project.use);
+  const contextB = await browser.newContext(testInfo.project.use);
+  const a = await contextA.newPage(), b = await contextB.newPage();
+  try {
+    await a.goto(baseURL);
+    await a.locator("#create").click();
+    await expect(a.locator(".room-code")).toBeVisible();
+    await b.goto(a.url());
+    await initialPeek(a);
+    await initialPeek(b);
+    await a.locator("#ready").click();
+    await b.locator("#ready").click();
+    await a.locator("#deck").click();
+    await expect(a.locator(".drawn-card")).toBeVisible();
+    await a.locator(".mine .card").nth(1).click();
+    await a.locator("#swap").click();
+    await expect(a.locator('.swap-note[data-source="deck"]')).toContainText("Your card 2");
+    await expect(a.locator('.swap-overlay .swap-flight')).toHaveCount(2);
+    await a.screenshot({ path: `test-results/${testInfo.project.name}-swap.png`, fullPage: true });
+    await expect(b.locator('.swap-note[data-source="deck"]')).toContainText("Partner’s card 2");
+    await expect(b.locator('.swap-overlay .swap-flight')).toHaveCount(2);
+    await expect(a.locator(".mine .swap-target")).toHaveCount(1);
+    await expect(b.locator(".partner .swap-target")).toHaveCount(1);
+    await expect(b.locator(".partner .card:not(.back)")).toHaveCount(0);
+    await resolveAbility(a);
+    await expect(b.locator("#take-discard")).toBeEnabled({ timeout: 15000 });
+    await b.emulateMedia({ reducedMotion: "reduce" });
+    await b.locator("#take-discard").click();
+    await expect(b.locator(".drawn-card")).toBeVisible();
+    await b.locator(".mine .card").nth(2).click();
+    await b.locator("#swap").click();
+    await expect(a.locator('.swap-note[data-source="discard"]')).toContainText("Partner’s card 3");
+    await expect(b.locator('.swap-note[data-source="discard"]')).toContainText("Your card 3");
+    await expect(b.locator(".swap-overlay")).toHaveCount(0);
+    await expect(a.locator(".partner .card:not(.back)")).toHaveCount(0);
+    const id = await a.locator(".swap-note").getAttribute("data-swap-id");
+    await a.reload();
+    await expect(a.locator(".cards .card")).toHaveCount(8);
+    await expect(a.locator(".swap-overlay")).toHaveCount(0);
+    if (await a.locator(".swap-note").count())
+      await expect(a.locator(".swap-note")).toHaveAttribute("data-swap-id", id);
+  } finally {
+    await contextA.close();
+    await contextB.close();
+  }
+});
 test("two isolated phones: private peeks, realtime turn, draw privacy, refresh, final turn, table reveal, next round", async ({
   browser,
   baseURL,

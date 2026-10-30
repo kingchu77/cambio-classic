@@ -80,6 +80,7 @@ export function createRoom(uid, target = 50) {
     ready: [false, false],
     nextReady: [false, false],
     result: null,
+    motion: null,
     event: {
       id: crypto.randomUUID(),
       text: "Your private table is ready. Invite your partner.",
@@ -108,6 +109,7 @@ export function startRound(g, now) {
   g.ready = [false, false];
   g.nextReady = [false, false];
   g.result = null;
+  g.motion = null;
   g.turnNumber = 0;
   announce(
     g,
@@ -411,6 +413,16 @@ export function apply(input, uid, cmd, now = Date.now()) {
     const a = g.hands[cmd.a.owner][i],
       b = g.hands[cmd.b.owner][j];
     [a.card, b.card] = [b.card, a.card];
+    g.motion = {
+      id: crypto.randomUUID(),
+      at: now,
+      kind: "blind-swap",
+      player: p,
+      targets: [
+        { owner: cmd.a.owner, card: a.id, index: i },
+        { owner: cmd.b.owner, card: b.id, index: j },
+      ],
+    };
     g.action = null;
     announce(g, `Player ${p + 1} swapped two cards without looking.`, now);
     finish(g, now);
@@ -478,6 +490,15 @@ export function apply(input, uid, cmd, now = Date.now()) {
       g.hands[p][i].card = drawn.card;
       g.hands[p][i].penaltyUntil = 0;
       played(g, old, p, now);
+      // Public movement only: never put either hidden card's face in this record.
+      g.motion = {
+        id: crypto.randomUUID(),
+        at: now,
+        kind: "draw-swap",
+        player: p,
+        source: drawn.source,
+        targets: [{ owner: p, card: g.hands[p][i].id, index: i }],
+      };
       return g;
     }
     need(
@@ -565,6 +586,7 @@ export function view(g, uid, version, code, now = Date.now()) {
     caller: g.caller,
     result: g.result,
     event: g.event,
+    motion: g.motion || null,
     serverNow: now,
   };
 }

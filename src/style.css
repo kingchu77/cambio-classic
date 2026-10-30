@@ -733,6 +733,40 @@ dialog h2 {
   outline-offset: 2px;
   animation: penaltyPulse 1s ease-in-out 4;
 }
+.swap-note {
+  margin: 4px 0 14px;
+  padding: 10px 12px;
+  border: 1px solid #dfbd7280;
+  border-radius: 8px;
+  color: #f7e2a8;
+  background: #092d23cc;
+  font-size: 11px;
+  line-height: 1.6;
+  text-align: center;
+}
+.card.swap-target {
+  outline: 3px solid #ffe29b;
+  outline-offset: 4px;
+  box-shadow: 0 0 24px #dfbd7280;
+}
+.card.swap-in-flight {
+  opacity: 0;
+}
+.swap-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  z-index: 8;
+  pointer-events: none;
+  overflow: hidden;
+}
+.swap-flight.card {
+  position: absolute;
+  margin: 0;
+  transition: none;
+  box-shadow: 0 12px 24px #001c1c99;
+}
 .penalty-badge {
   position: absolute;
   top: -11px;

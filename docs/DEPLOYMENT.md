@@ -81,7 +81,7 @@ Complete the acceptance checklist in [TESTING.md](TESTING.md), once over Wi-Fi/m
 
 For an automated live-backend smoke check, export the two public environment values and run `node scripts/smoke-supabase.js`. This creates two anonymous test users and one expiring test room, validates private projections/RLS, and checks an actual Realtime update. It does not require or accept a service-role key.
 
-To run the four mobile-browser tests against an already deployed frontend, set `CAMBIO_LIVE_URL` to its complete URL (including the repository subpath), then run `npm run test:e2e`. This bypasses the local test server and exercises the frontend's configured hosted backend. For example, in PowerShell:
+To run the mobile-browser tests against an already deployed frontend, set `CAMBIO_LIVE_URL` to its complete URL (including the repository subpath), then run `npm run test:e2e`. This bypasses the local test server and exercises the frontend's configured hosted backend. For example, in PowerShell:
 
 ```powershell
 $env:CAMBIO_LIVE_URL = 'https://kingchu77.github.io/cambio-classic/'

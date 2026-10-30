@@ -1,5 +1,6 @@
 import "./style.css";
 import { configured, isLocal, connect, request, subscribe } from "./api.js";
+import { captureSwap, playSwap, syncSwapTargets, clearSwapAnimation, swapLabel, SWAP_NOTE_MS } from "./swap-animation.js";
 
 const root = document.querySelector("#app");
 let state = null,
@@ -223,6 +224,7 @@ function render() {
       shell(`<div class="room-bar"><span>ROUND ${s.round} <b>·</b> TARGET ${s.target}</span><button class="room-link" id="copy">${s.code} ↗</button><span class="connection">${connected ? "● Live" : "◌ Syncing"}</span></div>
       ${hand(1 - s.me)}<section class="piles" aria-label="Draw piles"><div class="pile"><button id="deck" class="card back deck" aria-label="Draw from deck" ${canDraw && !busy ? "" : "disabled"}><span class="back-mark">♠</span></button><span>DECK <small>${s.deckCount}</small></span></div><div class="table-stamp">C<span>♣</span></div><div class="pile"><button id="take-discard" class="pile-button" aria-label="Take top discard and swap into your hand" ${canDraw && s.discard && !busy ? "" : "disabled"}>${publicCard(s.discard)}</button><span>DISCARD</span></div></section>
       <div class="snap-line" id="snap-line"></div>${hand(s.me)}
+      ${s.motion && now() - s.motion.at < SWAP_NOTE_MS ? `<p class="swap-note" role="status" data-swap-id="${escape(s.motion.id)}" data-kind="${escape(s.motion.kind)}" data-source="${escape(s.motion.source || "face-down")}">${escape(swapLabel(s.motion, s.me))}</p>` : ""}
       <section class="drawn-area" aria-label="Drawn card">${s.drawn ? `<div class="drawn-stack">${s.drawn.card ? publicCard(s.drawn.card, "drawn-card") : '<span class="card back"><span class="back-mark">♠</span></span>'}<span>${s.drawn.player === s.me ? `YOUR DRAW · ${s.drawn.source === "discard" ? "MUST SWAP" : "PRIVATE"}` : "PARTNER’S PRIVATE DRAW"}</span></div>` : ""}</section>
       <p id="status" class="status" role="status" aria-live="polite">${escape(status())}</p><p class="event" aria-live="polite">${escape(s.event?.text)}</p>${resultHTML()}<div class="actions">${controls()}</div>
       <p class="hint">${s.phase === "drawn" && mine ? "Select any face-down card, then “Snap drawn match” to play your draw and attempt a match." : s.phase === "ability" && mine ? "Finish the special ability to release the turn." : "Tap a matching face-down card to snap. One attempt each per discard."}</p>`);
@@ -256,8 +258,10 @@ function render() {
   bind("copy", copyInvite);
   bind("invite", shareInvite);
   bind("leave", leave);
+  syncSwapTargets(s?.motion, now());
 }
 function leave() {
+  clearSwapAnimation();
   unsub?.();
   unsub = null;
   state = null;
@@ -322,6 +326,7 @@ function accept(next) {
     return;
   }
   const old = state;
+  const swap = captureSwap(old, next);
   state = next;
   if (
     !old ||
@@ -336,6 +341,7 @@ function accept(next) {
   if (old?.action?.type !== next.action?.type) snapMode = false;
   if (seenEvent !== next.event?.id) seenEvent = next.event?.id;
   render();
+  playSwap(swap, publicCard, now());
 }
 async function enter(op) {
   if (busy) return;
@@ -435,6 +441,8 @@ function updateConnection() {
 function updateClock() {
   const el = document.getElementById("snap-line");
   if (!el || !state) return;
+  if (!state.motion || now() - state.motion.at >= SWAP_NOTE_MS)
+    document.querySelector(".swap-note")?.remove();
   document.querySelectorAll(".penalty-new").forEach((card) => {
     if (now() >= Number(card.dataset.penaltyUntil)) {
       card.classList.remove("penalty-new");

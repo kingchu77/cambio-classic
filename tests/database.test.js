@@ -13,7 +13,7 @@ test("real PostgreSQL migration: RLS isolation, denied writes/RPC, atomic versio
       create publication supabase_realtime;`);
     const migration = await readFile(
       new URL(
-        "../supabase/migrations/202610280001_cambio.sql",
+        "../supabase/migrations/20261030195519_cambio.sql",
         import.meta.url,
       ),
       "utf8",

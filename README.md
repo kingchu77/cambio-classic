@@ -2,7 +2,7 @@
 
 A real two-human-player card game: a green felt table, private invitations, anonymous seats, real-time state, private peeks, snap races, special cards, cumulative scores, and sequential on-table round reveals. Static frontend on **GitHub Pages**, authoritative backend on **Supabase**.
 
-**Delivery status:** implemented and locally tested. A live internet URL requires your GitHub repository and Supabase project to be configured. No deployment credentials were supplied. The local test server is disposable and is not an internet backend.
+**Live game:** [Play Cambio Classic](https://kingchu77.github.io/cambio-classic/). The frontend is published on GitHub Pages and the authoritative backend is deployed to Supabase. Create a private table and share its invitation with your partner.
 
 ## Try it now, without accounts
 
@@ -73,4 +73,4 @@ See [TESTING.md](docs/TESTING.md) for coverage and the two-real-iPhones acceptan
 
 ## Remaining deployment checks
 
-Live Supabase Auth, cross-region latency, hosted Realtime delivery, GitHub Pages publishing, and physical iPhone Safari require your configured project/devices and were not verified by local tests. There is no AI player or offline single-player mode. Rooms expire after seven days without a state-changing action; sessions use persistent browser storage. Supabase plan limits/pausing and authentication abuse controls should be checked in your project before sharing widely.
+GitHub Pages, live Supabase anonymous Auth, the game function, private projections/RLS, and hosted Realtime delivery were verified on 2026-10-30. See [LIVE-DEPLOYMENT.md](docs/LIVE-DEPLOYMENT.md) for the deployment record. Physical iPhone Safari on separate networks remains a manual acceptance check. There is no AI player or offline single-player mode. Rooms expire after seven days without a state-changing action; sessions use persistent browser storage. Supabase plan limits/pausing and authentication abuse controls should be checked before sharing widely.

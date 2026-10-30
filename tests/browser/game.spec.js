@@ -8,6 +8,8 @@ async function initialPeek(page) {
   await expect(page.locator(".mine .card:not(.back)")).toHaveCount(2);
 }
 async function resolveAbility(page) {
+  // Wait for the discard response before inspecting the resulting ability.
+  await expect(page.locator(".drawn-card")).toHaveCount(0);
   if (await page.locator("#ability-swap").count()) {
     await page.locator(".mine .card").nth(0).click();
     await page.locator(".partner .card").nth(0).click();
@@ -93,9 +95,10 @@ test("two isolated phones: private peeks, realtime turn, draw privacy, refresh, 
 });
 test("mobile lobby, room code, copy fallback, reduced motion, accessible rules", async ({
   page,
+  baseURL,
 }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
-  await page.goto("/");
+  await page.goto(baseURL);
   await expect(
     page.getByRole("heading", { name: "Two players. One good evening." }),
   ).toBeVisible();

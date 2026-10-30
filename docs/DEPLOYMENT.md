@@ -81,6 +81,15 @@ Complete the acceptance checklist in [TESTING.md](TESTING.md), once over Wi-Fi/m
 
 For an automated live-backend smoke check, export the two public environment values and run `node scripts/smoke-supabase.js`. This creates two anonymous test users and one expiring test room, validates private projections/RLS, and checks an actual Realtime update. It does not require or accept a service-role key.
 
+To run the four mobile-browser tests against an already deployed frontend, set `CAMBIO_LIVE_URL` to its complete URL (including the repository subpath), then run `npm run test:e2e`. This bypasses the local test server and exercises the frontend's configured hosted backend. For example, in PowerShell:
+
+```powershell
+$env:CAMBIO_LIVE_URL = 'https://kingchu77.github.io/cambio-classic/'
+npm run test:e2e
+```
+
+Live tests create anonymous test seats and expiring rooms. They use no admin keys. The migration filename matches the version recorded during the initial hosted deployment, so subsequent CLI deployments will not attempt to apply the same schema twice.
+
 ## Local Supabase stack (optional)
 
 Requires Docker and the Supabase CLI. Run `npx supabase@2.122.0 start`, then `npx supabase@2.122.0 functions serve game` in another terminal. Use the local API URL and anonymous public API key printed by the CLI in `.env.local`. `npm run dev` accepts the local CLI's legacy anonymous key for local development; the production configuration checker requires a modern publishable key. Local config enables anonymous sign-ins. The CLI applies local migrations on startup. Never put the local service-role key in the frontend.

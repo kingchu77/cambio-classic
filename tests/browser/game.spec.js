@@ -31,6 +31,14 @@ async function resolveAbility(page) {
 test("both players see deck and discard swap origins and the replaced slot", async ({ browser, baseURL }, testInfo) => {
   const contextA = await browser.newContext(testInfo.project.use);
   const contextB = await browser.newContext(testInfo.project.use);
+  for (const context of [contextA, contextB]) await context.addInitScript(() => {
+    window.swapFlights = [];
+    new MutationObserver((changes) => {
+      for (const change of changes) for (const node of change.addedNodes)
+        if (node.matches?.('.swap-overlay[data-kind="draw-swap"]'))
+          window.swapFlights.push({ id: node.dataset.swapId, count: node.querySelectorAll('.swap-flight:not([data-reflow])').length });
+    }).observe(document, { childList: true, subtree: true });
+  });
   const a = await contextA.newPage(), b = await contextB.newPage();
   try {
     await a.goto(baseURL);
@@ -46,10 +54,10 @@ test("both players see deck and discard swap origins and the replaced slot", asy
     await a.locator(".mine .card").nth(1).click();
     await a.locator("#swap").click();
     await expect(a.locator('.swap-note[data-source="deck"]')).toContainText("Your card 2");
-    await expect(a.locator('.swap-overlay .swap-flight')).toHaveCount(2);
+    await expect.poll(() => a.evaluate(() => window.swapFlights.at(-1)?.count)).toBe(2);
     await a.screenshot({ path: `test-results/${testInfo.project.name}-swap.png`, fullPage: true });
     await expect(b.locator('.swap-note[data-source="deck"]')).toContainText("Partner’s card 2");
-    await expect(b.locator('.swap-overlay .swap-flight')).toHaveCount(2);
+    await expect.poll(() => b.evaluate(() => window.swapFlights.at(-1)?.count)).toBe(2);
     await expect(a.locator(".mine .swap-target")).toHaveCount(1);
     await expect(b.locator(".partner .swap-target")).toHaveCount(1);
     await expect(b.locator(".partner .card:not(.back)")).toHaveCount(0);
@@ -64,12 +72,10 @@ test("both players see deck and discard swap origins and the replaced slot", asy
     await expect(b.locator('.swap-note[data-source="discard"]')).toContainText("Your card 3");
     await expect(b.locator(".swap-overlay")).toHaveCount(0);
     await expect(a.locator(".partner .card:not(.back)")).toHaveCount(0);
-    const id = await a.locator(".swap-note").getAttribute("data-swap-id");
     await a.reload();
     await expect(a.locator(".cards .card")).toHaveCount(8);
     await expect(a.locator(".swap-overlay")).toHaveCount(0);
-    if (await a.locator(".swap-note").count())
-      await expect(a.locator(".swap-note")).toHaveAttribute("data-swap-id", id);
+    expect(await a.evaluate(() => window.swapFlights)).toEqual([]);
   } finally {
     await contextA.close();
     await contextB.close();

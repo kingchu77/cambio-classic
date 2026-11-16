@@ -9,7 +9,7 @@ iPhone Safari (static GitHub Pages)
   │    → private room load → pure rules engine → atomic PostgreSQL commit
   │    → only this user's projection in response
   ├─ Authenticated Realtime → only own cambio_views rows (RLS)
-  └─ 1.5-second visible-page sync → repair/reconnect and final-window advancement
+  └─ 1.5-second visible-page sync → repair/reconnect
 ```
 
 The frontend never shuffles, validates hidden ranks, decides a snap winner, or calculates authoritative scores. It sends actions referencing opaque card **slots**, plus a unique request ID. Client timestamps and client-supplied identities are ignored.
@@ -36,11 +36,13 @@ Retried network requests retain the same request ID. A duplicate never replays a
 
 ## Timing and recovery
 
-Snap windows last six seconds from a deliberate play. The next player is identified immediately but cannot draw/call until the deadline or a winner. Mandatory abilities may overlap this window and must complete. Opponent snaps pause all choices for the face-down transfer; the turn/action resumes afterward. If the snap removes the last legal ability target, the impossible action completes instead of deadlocking.
+Snap opportunities have no deadline and do not delay drawing or calling Cambio. A deck draw keeps the same face-up discard available; taking the discard targets the newly exposed card, if any. Each player has one attempt and the first successful database commit closes that opportunity. The snapped card becomes the visible top without starting another opportunity. Opponent snaps pause choices only for the mandatory face-down transfer; the turn/action resumes afterward. Impossible abilities complete instead of deadlocking.
 
-The final turn waits for the final snap event before scoring. An absolute server timestamp starts the on-table reveal sequence. Both phones use that same schedule and adjust to server time on responses; a late reconnect skips already elapsed delays. Reduced-motion users see the revealed cards immediately, while next-round voting still waits for the shared reveal deadline.
+The final turn scores as soon as outstanding draws, abilities and transfers finish. An absolute server timestamp starts the on-table reveal sequence. Both phones use that schedule and adjust to server time on responses; a late reconnect skips elapsed delays. Reduced-motion users see the revealed cards immediately, while next-round voting still waits for the shared reveal deadline.
 
-No timer process owns a room. A `sync` request advances a pending final-window deadline. Realtime delivers commits immediately, and polling repairs missed notifications. Background iPhone Safari tabs may suspend WebSockets/requests; returning to the foreground syncs authoritative state. A lost phone never silently forfeits or gets an AI replacement.
+Every physical card move is recorded in a bounded public movement journal. Recent events survive fast consecutive actions between polling updates and are animated in order without blocking input. Only cards becoming public discards carry faces; dealt cards, private draws, penalties, transfers and blind swaps travel face down. Remaining hand positions animate as they reflow. Browser-session event IDs prevent reconnects from replaying past movements. The legacy last-swap record remains available for older clients.
+
+No timer process owns a room. A `sync` request repairs older rooms left in a settling state. Realtime delivers commits immediately, and polling repairs missed notifications. Background iPhone Safari tabs may suspend WebSockets/requests; returning to the foreground syncs authoritative state. A lost phone never silently forfeits or gets an AI replacement.
 
 ## Operational boundaries
 

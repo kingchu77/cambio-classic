@@ -1,122 +1,157 @@
-// Movement is public; these effects never receive a hidden card face.
-const FLIGHT_MS = 1050;
+// Public movement journal only. Private draws and transfers always travel face down.
 export const SWAP_NOTE_MS = 6500;
-let playing = null;
-let highlightTimer;
-
-const cardElement = (target) =>
-  document.querySelector(
-    `[data-owner="${target.owner}"][data-card="${CSS.escape(target.card)}"]`,
-  );
+let room = "", seen = new Set(), queue = [], playing = null;
+let currentView = null, renderCard, notice = null, noticeUntil = 0, timer;
 const rect = (element) => {
-  if (!element) return;
+  if (!element) return null;
   const box = element.getBoundingClientRect();
-  // Anchor flights to the table, including when mobile scroll anchoring moves
-  // the viewport as the drawn-card controls disappear.
-  return { left: box.left + window.scrollX, top: box.top + window.scrollY, width: box.width, height: box.height };
+  return { left: box.left + scrollX, top: box.top + scrollY, width: box.width, height: box.height };
 };
-
-export function swapLabel(motion, me) {
-  const slot = (target) =>
-    `${target.owner === me ? "Your" : "Partner’s"} card ${target.index + 1}`;
-  return motion.kind === "blind-swap"
-    ? `Face-down swap: ${slot(motion.targets[0])} ↔ ${slot(motion.targets[1])}`
-    : `${motion.source === "deck" ? "Draw pile" : "Discard pile"} → ${slot(motion.targets[0])} · Replaced card → discard`;
+const handCard = (location) => document.querySelector(`[data-owner="${location.owner}"][data-card="${CSS.escape(location.card || "")}"]`);
+function elementAt(location) {
+  if (location.zone === "hand") return handCard(location);
+  if (location.zone === "drawn") return document.querySelector(".drawn-area .card");
+  return document.querySelector(location.zone === "deck" ? "#deck" : "#take-discard .card");
 }
-
-export function captureSwap(previous, next) {
-  const motion = next.motion;
-  // Reconnects do not replay old swaps; repeated polls share the same motion ID.
-  if (
-    !previous || previous.code !== next.code || previous.round !== next.round ||
-    !motion || motion.id === previous.motion?.id ||
-    next.serverNow - motion.at > SWAP_NOTE_MS
-  ) return null;
-  return {
-    motion,
-    from: motion.targets.map((target) => rect(cardElement(target))),
-    source: rect(document.querySelector(motion.source === "discard" ? "#take-discard .card" : "#deck")),
-    discarded: next.discard,
-  };
+function position(location) {
+  const exact = rect(elementAt(location));
+  if (exact) return exact;
+  const style = getComputedStyle(document.documentElement);
+  const width = parseFloat(style.getPropertyValue("--card-w"));
+  const height = parseFloat(style.getPropertyValue("--card-h"));
+  const hand = document.querySelector(location.owner === currentView?.me ? ".mine .cards" : ".partner .cards");
+  const anchor = location.zone === "hand" ? hand : document.querySelector(".drawn-area");
+  const box = rect(anchor) || rect(document.querySelector(".piles"));
+  if (!box) return null;
+  const neighbour = location.zone === "hand" ? rect(hand?.querySelectorAll(".card")[Math.min(location.index || 0, hand.children.length - 1)]) : null;
+  return neighbour || { left: box.left + (box.width - width) / 2, top: box.top, width, height };
 }
-
-export function syncSwapTargets(motion, time) {
-  document.querySelectorAll(".swap-target, .swap-in-flight").forEach((element) =>
-    element.classList.remove("swap-target", "swap-in-flight"),
-  );
-  if (!motion || time - motion.at > 3200) return;
-  for (const target of motion.targets) {
-    const element = cardElement(target);
-    element?.classList.add("swap-target");
-    if (playing?.id === motion.id) element?.classList.add("swap-in-flight");
+const slotName = (location, me) => `${location.owner === me ? "Your" : "Partner’s"} card ${location.index + 1}`;
+export function swapLabel(event, me) {
+  const moves = event.moves, first = moves[0];
+  switch (event.kind) {
+    case "deal": return "Cards dealt face down · Remember two cards";
+    case "draw": return `${event.source === "discard" ? "Discard pile" : "Draw pile"} → ${event.player === me ? "Your" : "Partner’s"} draw`;
+    case "discard": return `${event.player === me ? "Your" : "Partner’s"} draw → Discard pile`;
+    case "draw-swap": return `${event.source === "deck" ? "Draw pile" : "Discard pile"} → ${slotName(first.to, me)} · Replaced card → discard`;
+    case "blind-swap": return `Face-down swap: ${slotName(first.from, me)} ↔ ${slotName(first.to, me)}`;
+    case "snap": return `${slotName(first.from, me)} → Discard pile · Snap`;
+    case "transfer": return `${slotName(first.from, me)} → ${slotName(first.to, me)} · Face-down transfer`;
+    case "penalty": return `Draw pile → ${slotName(first.to, me)} · Penalty`;
+    case "recycle": return "Discard pile → Draw pile · Reshuffled face down";
+    default: return "Card moved";
   }
-  clearTimeout(highlightTimer);
-  highlightTimer = setTimeout(() => syncSwapTargets(null, time), Math.max(0, 3200 - (time - motion.at)));
 }
-
+export function captureSwap(previous, next) {
+  if (room !== next.code) {
+    clearSwapAnimation();
+    room = next.code;
+    try { seen = new Set(JSON.parse(sessionStorage.getItem(`cambio-movements-${room}`) || "[]")); }
+    catch { seen = new Set(); }
+  }
+  const events = next.movements || [];
+  const fresh = events.filter((event) => !seen.has(event.id) && next.serverNow - event.at < 15000 &&
+    (previous || (event.kind === "deal" && next.phase === "initial")));
+  for (const event of events) seen.add(event.id);
+  seen = new Set([...seen].slice(-64));
+  try { sessionStorage.setItem(`cambio-movements-${room}`, JSON.stringify([...seen])); } catch { /* Optional replay protection. */ }
+  const before = new Map([...document.querySelectorAll(".cards .card")].map((card) => [card.dataset.card, rect(card)]));
+  return fresh.map((event, index) => ({ event,
+    from: event.moves.map((move) => position(move.from)),
+    before: index === fresh.length - 1 ? before : new Map(),
+  }));
+}
+function masks() {
+  document.querySelectorAll(".swap-in-flight, .swap-target").forEach((card) => card.classList.remove("swap-in-flight", "swap-target"));
+  // Keep the final snapshot from visually teleporting cards ahead of queued flights.
+  for (const job of [...(playing ? [playing] : []), ...queue]) {
+    for (const move of job.event.moves) {
+      if (move.to.zone !== "deck") elementAt(move.to)?.classList.add("swap-in-flight");
+    }
+  }
+  for (const id of playing?.reflow || []) document.querySelector(`[data-card="${CSS.escape(id)}"]`)?.classList.add("swap-in-flight");
+  const event = playing?.event || (Date.now() < noticeUntil ? notice : null);
+  for (const move of event?.moves || []) if (move.to.zone === "hand") handCard(move.to)?.classList.add("swap-target");
+}
+export function syncSwapTargets(view, time) {
+  currentView = view;
+  masks();
+  const element = document.querySelector("#movement-note");
+  if (!element || !view) return;
+  const last = view.movements?.at(-1);
+  const event = playing?.event || (Date.now() < noticeUntil ? notice : null) || (last && time - last.at < SWAP_NOTE_MS ? last : null);
+  element.hidden = !event;
+  element.textContent = event ? swapLabel(event, view.me) : "";
+  element.dataset.swapId = event?.id || "";
+  element.dataset.kind = event?.kind || "";
+  element.dataset.source = event?.source || "face-down";
+}
 export function clearSwapAnimation() {
-  playing?.overlay.remove();
-  playing = null;
-  clearTimeout(highlightTimer);
-  document.querySelectorAll(".swap-in-flight, .swap-target").forEach((element) =>
-    element.classList.remove("swap-in-flight", "swap-target"),
-  );
+  clearTimeout(timer);
+  playing?.overlay?.remove();
+  queue = []; playing = null; notice = null; noticeUntil = 0;
+  document.querySelectorAll(".swap-in-flight, .swap-target").forEach((card) => card.classList.remove("swap-in-flight", "swap-target"));
 }
-
-export function playSwap(job, publicCard, time) {
-  if (!job) return;
-  clearSwapAnimation();
-  const { motion } = job;
-  syncSwapTargets(motion, time);
-  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-  const destinations = motion.targets.map((target) => rect(cardElement(target)));
-  if (destinations.some((destination) => !destination)) return;
+function pump() {
+  if (playing || !queue.length) return;
+  const job = queue.shift(), event = job.event;
+  notice = event; noticeUntil = Date.now() + 3200;
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    syncSwapTargets(currentView, currentView?.serverNow || Date.now());
+    pump();
+    return;
+  }
   const overlay = document.createElement("div");
   overlay.className = "swap-overlay";
-  overlay.dataset.swapId = motion.id;
-  overlay.dataset.kind = motion.kind;
+  overlay.dataset.swapId = event.id;
+  overlay.dataset.kind = event.kind;
   overlay.style.height = `${document.documentElement.scrollHeight}px`;
   overlay.setAttribute("aria-hidden", "true");
   document.body.append(overlay);
-  playing = { id: motion.id, overlay };
-  syncSwapTargets(motion, time);
-
-  const fly = (from, to, contents, arc) => {
-    if (!from || !to) return;
-    const wrap = document.createElement("div");
-    wrap.innerHTML = contents;
-    const card = wrap.firstElementChild;
-    card.classList.add("swap-flight");
-    Object.assign(card.style, {
-      left: `${from.left}px`, top: `${from.top}px`,
-      width: `${from.width}px`, height: `${from.height}px`,
-    });
-    overlay.append(card);
-    const x = to.left - from.left, y = to.top - from.top;
-    const distance = Math.hypot(x, y) || 1;
-    const midpointX = x / 2 - y / distance * arc;
-    const midpointY = y / 2 + x / distance * arc;
-    card.animate([
-      { transform: "translate(0, 0) rotate(0deg)", opacity: 1 },
-      { transform: `translate(${midpointX}px, ${midpointY}px) rotate(${arc > 0 ? 7 : -7}deg)`, opacity: 1, offset: 0.5 },
-      { transform: `translate(${x}px, ${y}px) rotate(0deg)`, opacity: 1, offset: 0.9 },
-      { transform: `translate(${x}px, ${y}px) rotate(0deg)`, opacity: 0 },
-    ], { duration: FLIGHT_MS, easing: "cubic-bezier(.22,.65,.3,1)", fill: "forwards" });
-  };
+  playing = { ...job, overlay, reflow: [] };
+  const duration = ["draw-swap", "blind-swap"].includes(event.kind) ? 700 : 430;
+  let total = duration;
   const back = '<span class="card back"><span class="back-mark">♠</span></span>';
-  if (motion.kind === "blind-swap") {
-    fly(job.from[0] || destinations[0], destinations[1], back, 32);
-    fly(job.from[1] || destinations[1], destinations[0], back, 32);
-  } else {
-    fly(job.source, destinations[0], back, 26);
-    // Only the card now publicly on the discard pile may be shown face up.
-    fly(job.from[0] || destinations[0], rect(document.querySelector("#take-discard .card")), publicCard(job.discarded), -26);
-  }
-  setTimeout(() => {
-    overlay.remove();
-    if (playing?.id === motion.id) {
-      playing = null;
-      document.querySelectorAll(".swap-in-flight").forEach((element) => element.classList.remove("swap-in-flight"));
+  const fly = (from, to, face, arc = 24, delay = 0, reflow = false) => {
+    if (!from || !to) return;
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = face ? renderCard(face) : back;
+    const card = wrapper.firstElementChild;
+    card.classList.add("swap-flight");
+    if (reflow) card.dataset.reflow = "true";
+    Object.assign(card.style, { left: `${from.left}px`, top: `${from.top}px`, width: `${from.width}px`, height: `${from.height}px` });
+    overlay.append(card);
+    const x = to.left - from.left, y = to.top - from.top, distance = Math.hypot(x, y) || 1;
+    card.animate([
+      { transform: "translate(0,0) rotate(0deg)", opacity: 1 },
+      { transform: `translate(${x / 2 - y / distance * arc}px,${y / 2 + x / distance * arc}px) rotate(${arc > 0 ? 6 : -6}deg)`, opacity: 1, offset: .5 },
+      { transform: `translate(${x}px,${y}px) rotate(0deg)`, opacity: 1, offset: .94 },
+      { transform: `translate(${x}px,${y}px) rotate(0deg)`, opacity: 0 },
+    ], { duration, delay, easing: "cubic-bezier(.22,.65,.3,1)", fill: "both" });
+    total = Math.max(total, duration + delay);
+  };
+  const affected = new Set(event.moves.flatMap((move) => [move.from.card, move.to.card]));
+  event.moves.forEach((move, index) => fly(job.from[index] || position(move.from), position(move.to), move.face,
+    event.kind === "blind-swap" ? 30 : index % 2 ? -24 : 24,
+    event.kind === "deal" ? index * 65 : event.kind === "recycle" ? index * 10 : 0));
+  for (const [id, from] of job.before) {
+    if (affected.has(id)) continue;
+    const element = document.querySelector(`[data-card="${CSS.escape(id)}"]`), to = rect(element);
+    if (to && Math.hypot(to.left - from.left, to.top - from.top) > 2) {
+      playing.reflow.push(id);
+      fly(from, to, null, 0, 0, true);
     }
-  }, FLIGHT_MS);
+  }
+  syncSwapTargets(currentView, currentView?.serverNow || Date.now());
+  timer = setTimeout(() => {
+    overlay.remove(); playing = null;
+    syncSwapTargets(currentView, currentView?.serverNow || Date.now());
+    pump();
+  }, total);
+}
+export function playSwap(jobs, publicCard, time) {
+  renderCard = publicCard;
+  queue.push(...(jobs || []));
+  pump();
+  syncSwapTargets(currentView, time);
 }

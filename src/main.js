@@ -1,6 +1,6 @@
 import "./style.css";
 import { configured, isLocal, connect, request, subscribe } from "./api.js";
-import { captureSwap, playSwap, syncSwapTargets, clearSwapAnimation, swapLabel, SWAP_NOTE_MS } from "./swap-animation.js";
+import { captureSwap, playSwap, syncSwapTargets, clearSwapAnimation } from "./swap-animation.js";
 
 const root = document.querySelector("#app");
 let state = null,
@@ -56,7 +56,7 @@ function status() {
         : "Black King · Select any two cards, then swap without looking.";
   }
   if (s.phase === "settling")
-    return "Snap window open. Tap a matching card before the next turn.";
+    return "Finishing the turn…";
   if (s.phase === "round-end") return "Cards on the table. Lowest score wins.";
   if (s.phase === "drawn")
     return mine
@@ -133,7 +133,7 @@ function controls() {
         "Hide & finish ability",
         true,
         "full gold",
-      );
+      ) + actionButton("snap-mode", snapMode ? "Return to ability" : "Try a snap", !!activeSnap(), "outline full");
     return (
       (s.action.type === "blind-swap"
         ? actionButton(
@@ -160,6 +160,7 @@ function controls() {
         "gold",
       ),
       actionButton("swap", "Swap selected", picked?.owner === s.me, "gold"),
+      actionButton("snap-discard", "Snap to discard", !!picked && !!activeSnap(), "outline full"),
       actionButton(
         "snap-drawn",
         "Snap drawn match",
@@ -176,7 +177,7 @@ function controls() {
 }
 function activeSnap() {
   const snap = state?.snap;
-  return snap && !snap.winner && !snap.tried && now() < snap.closesAt
+  return snap && !snap.winner && !snap.tried
     ? snap
     : null;
 }
@@ -218,16 +219,15 @@ function render() {
     const mine = s.turn === s.me,
       canDraw =
         mine &&
-        s.phase === "turn" &&
-        (!s.snap || s.snap.winner || now() >= s.snap.closesAt);
+        s.phase === "turn";
     root.innerHTML =
       shell(`<div class="room-bar"><span>ROUND ${s.round} <b>·</b> TARGET ${s.target}</span><button class="room-link" id="copy">${s.code} ↗</button><span class="connection">${connected ? "● Live" : "◌ Syncing"}</span></div>
       ${hand(1 - s.me)}<section class="piles" aria-label="Draw piles"><div class="pile"><button id="deck" class="card back deck" aria-label="Draw from deck" ${canDraw && !busy ? "" : "disabled"}><span class="back-mark">♠</span></button><span>DECK <small>${s.deckCount}</small></span></div><div class="table-stamp">C<span>♣</span></div><div class="pile"><button id="take-discard" class="pile-button" aria-label="Take top discard and swap into your hand" ${canDraw && s.discard && !busy ? "" : "disabled"}>${publicCard(s.discard)}</button><span>DISCARD</span></div></section>
       <div class="snap-line" id="snap-line"></div>${hand(s.me)}
-      ${s.motion && now() - s.motion.at < SWAP_NOTE_MS ? `<p class="swap-note" role="status" data-swap-id="${escape(s.motion.id)}" data-kind="${escape(s.motion.kind)}" data-source="${escape(s.motion.source || "face-down")}">${escape(swapLabel(s.motion, s.me))}</p>` : ""}
+      <p id="movement-note" class="swap-note" role="status" hidden></p>
       <section class="drawn-area" aria-label="Drawn card">${s.drawn ? `<div class="drawn-stack">${s.drawn.card ? publicCard(s.drawn.card, "drawn-card") : '<span class="card back"><span class="back-mark">♠</span></span>'}<span>${s.drawn.player === s.me ? `YOUR DRAW · ${s.drawn.source === "discard" ? "MUST SWAP" : "PRIVATE"}` : "PARTNER’S PRIVATE DRAW"}</span></div>` : ""}</section>
       <p id="status" class="status" role="status" aria-live="polite">${escape(status())}</p><p class="event" aria-live="polite">${escape(s.event?.text)}</p>${resultHTML()}<div class="actions">${controls()}</div>
-      <p class="hint">${s.phase === "drawn" && mine ? "Select any face-down card, then “Snap drawn match” to play your draw and attempt a match." : s.phase === "ability" && mine ? "Finish the special ability to release the turn." : "Tap a matching face-down card to snap. One attempt each per discard."}</p>`);
+      <p class="hint">${s.phase === "drawn" && mine ? "Select a hand card to swap, snap it to the discard, or use “Snap drawn match”." : s.phase === "ability" && mine ? "Finish the special ability to release the turn, or choose “Try a snap”." : "Snap a matching hand card at any time. One successful snap per discard."}</p>`);
     document
       .querySelectorAll("[data-card]")
       .forEach(
@@ -242,6 +242,7 @@ function render() {
     bind("discard", () => act({ type: "discard" }));
     bind("swap", () => act({ type: "swap", card: selected[0]?.card }));
     bind("snap-drawn", () => act({ type: "snap-drawn", ...selected[0] }));
+    bind("snap-discard", () => act({ type: "snap", ...selected[0], event: state.snap?.id }));
     bind("ability-done", () => act({ type: "ability-done" }));
     bind("ability-swap", () =>
       act({ type: "ability-swap", a: selected[0], b: selected[1] }),
@@ -258,7 +259,7 @@ function render() {
   bind("copy", copyInvite);
   bind("invite", shareInvite);
   bind("leave", leave);
-  syncSwapTargets(s?.motion, now());
+  syncSwapTargets(s, now());
 }
 function leave() {
   clearSwapAnimation();
@@ -314,7 +315,7 @@ function choose(owner, card) {
     return;
   }
   if (activeSnap()) act({ type: "snap", owner, card, event: s.snap.id });
-  else toast("No open snap. Wait for a newly played card.");
+  else toast("No snap available for this discard. Wait for the discard to change.");
 }
 function accept(next) {
   if (state && (next.code !== state.code || next.version < state.version))
@@ -441,8 +442,7 @@ function updateConnection() {
 function updateClock() {
   const el = document.getElementById("snap-line");
   if (!el || !state) return;
-  if (!state.motion || now() - state.motion.at >= SWAP_NOTE_MS)
-    document.querySelector(".swap-note")?.remove();
+  syncSwapTargets(state, now());
   document.querySelectorAll(".penalty-new").forEach((card) => {
     if (now() >= Number(card.dataset.penaltyUntil)) {
       card.classList.remove("penalty-new");
@@ -458,8 +458,8 @@ function updateClock() {
     : snap?.winner
       ? `SNAP · ${snap.winner.player === state.me ? "YOU" : "PARTNER"} WON`
       : activeSnap()
-        ? `SNAP ${face(snap.card)} · ${Math.max(0, Math.ceil((snap.closesAt - now()) / 1000))}s`
-        : snap?.tried && now() < snap.closesAt
+        ? `SNAP ${face(snap.card)} · AVAILABLE`
+        : snap?.tried
           ? "ATTEMPT USED · WAIT FOR THE NEXT CARD"
           : "♠  MEMORY IS EVERYTHING  ♠";
   if (state.phase === "round-end") {
@@ -474,8 +474,7 @@ function updateClock() {
   }
   if (state.phase === "turn" && state.turn === state.me) {
     const allowed =
-      !busy &&
-      (!state.snap || !!state.snap.winner || now() >= state.snap.closesAt);
+      !busy;
     const deck = document.getElementById("deck"),
       discard = document.getElementById("take-discard"),
       call = document.getElementById("call");
@@ -544,7 +543,7 @@ function showDialog(title, content) {
 function showRules() {
   showDialog(
     "A little memory. A little nerve.",
-    `<p>Start with four face-down cards. Privately peek at two, then hide them. Lowest score wins.</p><p><strong>Your turn:</strong> draw from the deck and discard or swap with your own card. Taking the discard means you must swap. Or call Cambio before drawing: your partner gets one final turn.</p><p><strong>Specials:</strong> J peeks at your card. Red Q peeks at a partner card. Black K swaps any two without looking. Finish the ability before play continues.</p><p><strong>Snap:</strong> after a card is played, tap any matching-rank card within six seconds. One attempt each; first correct server commit wins. A wrong snap adds a hidden penalty card. Snapping a partner card means passing one of yours face down. After drawing, select a card and press “Snap drawn match” to play your draw and attempt a snap against it. Its special ability still applies; the removed card’s ability does not.</p><p><strong>Points:</strong> A = 1, 2–10 = face value, J/Q/black K = 10, red K = 0, Joker = −2. Numbers have no abilities. A beaten Cambio caller adds 10; ties add no penalty. Scores accumulate. At the target, lower total wins.</p><p>Your browser remembers your seat. Use the same browser to reconnect. Keep the room code private.</p>`,
+    `<p>Start with four face-down cards. Privately peek at two, then hide them. Lowest score wins.</p><p><strong>Your turn:</strong> draw from the deck and discard or swap with your own card. Taking the discard means you must swap. Or call Cambio before drawing: your partner gets one final turn.</p><p><strong>Specials:</strong> J peeks at your card. Red Q peeks at a partner card. Black K swaps any two without looking. Finish the ability before play continues.</p><p><strong>Snap:</strong> tap a matching-rank hand card at any time while the discard stays available. Turns continue immediately. One attempt each, and only one successful snap per discard; first correct server commit wins. A wrong snap adds a hidden penalty card. Snapping a partner card means passing one of yours face down. After drawing, select a card and press “Snap drawn match” to play your draw and attempt a snap against it. Its special ability still applies; the removed card’s ability does not.</p><p><strong>Points:</strong> A = 1, 2–10 = face value, J/Q/black K = 10, red K = 0, Joker = −2. Numbers have no abilities. A beaten Cambio caller adds 10; ties add no penalty. Scores accumulate. At the target, lower total wins.</p><p>Your browser remembers your seat. Use the same browser to reconnect. Keep the room code private.</p>`,
   );
 }
 let sessionReady = false,

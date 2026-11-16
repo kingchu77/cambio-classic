@@ -96,7 +96,7 @@ Requires Docker and the Supabase CLI. Run `npx supabase@2.122.0 start`, then `np
 
 ## Operations and recovery
 
-- The Realtime subscription is scoped to the authenticated user's `cambio_views` row. Polling every 1.5 seconds repairs missed updates and advances expired final-turn windows; hidden tabs pause polling. There is no required always-running timer worker.
+- The Realtime subscription is scoped to the authenticated user's `cambio_views` row. Polling every 1.5 seconds repairs missed updates and resumes legacy settling states; hidden tabs pause polling. There is no required always-running timer worker.
 - Anonymous browser tokens persist locally and refresh through Supabase Auth. Changing devices/storage cannot recover a seat; start another room. Seats cannot be silently replaced by a stranger holding an old invite.
 - Rooms expire seven days after the last state change. Optionally schedule `delete from public.cambio_rooms where expires_at < now();` in Supabase; child snapshots/receipts cascade. Do not delete active anonymous users. Provider-wide abuse protection can be configured in Supabase; CAPTCHA is not implemented in this frontend, so enabling mandatory CAPTCHA requires adding its token flow first.
 - Actions are limited per authenticated UID: 5 creates/hour, 30 joins/minute, 240 game requests/minute. This is suitable for a private two-person game; it is not a complete defence against mass anonymous account creation.

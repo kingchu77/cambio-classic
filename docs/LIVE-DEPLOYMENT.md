@@ -18,3 +18,11 @@ All four application tables have RLS enabled. Clients can select only their own 
 Verification passed: all 30 rules/database tests, the production backend smoke test (anonymous login, joins, private peeks/draw, RLS, and actual Realtime delivery), and all four mobile-browser tests against the live GitHub Pages URL in Chromium and WebKit. The browser checks include a complete round, private draws, refresh/reconnect, final-turn scoring, table reveals, and starting the next round. Physical phones were not used. The first Realtime smoke attempt during cold service initialization timed out; the subsequent check passed once replication initialized. The frontend also polls to recover missed updates.
 
 Live tests leave anonymous test users and rooms that expire normally. Physical iPhones on separate networks still require the acceptance checklist in TESTING.md. Future frontend pushes to `main` publish through GitHub Actions; backend changes must be deployed separately using DEPLOYMENT.md.
+
+## 2026-11-15 gameplay update
+
+The game function is now version 3. All physical card routes publish ordered public movement events for both seats: dealing, draws, burns, replacements, blind swaps, snaps, penalties, face-down transfers, and recycling. Hand reflow also animates. Private card flights carry no faces. Reduced-motion and reconnect behavior remain supported.
+
+Snaps have no deadline and no turn delay. One successful snap is allowed against each discard opportunity, including only one additional five on a five. A successful snap does not reopen the opportunity; a changed discard does. Deck draws preserve the current opportunity. Final-turn scoring follows any outstanding draw, ability, snap-drawn, or transfer immediately.
+
+Local verification passed: 36 rules/database checks and all 8 mobile-browser checks across Chromium and WebKit. The deterministic two-phone checks cover every movement route, delayed snapping, the single-success limit, and private flight data.

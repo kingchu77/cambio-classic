@@ -31,6 +31,75 @@ function drawPlay(g, c, now = 2000) {
 }
 const fails = (fn, code) => assert.throws(fn, (e) => e.code === code);
 
+test("only one extra matching card can be snapped onto the burn pile, without a deadline", () => {
+  let g = fixture();
+  g.hands[0][0].card = C(5, "♥");
+  g.hands[1][0].card = C(5, "♦");
+  g = drawPlay(g, C(5));
+  const event = g.snap.id;
+  g = apply(g, U[1], { type: "snap", owner: 1, card: g.hands[1][0].id, event }, 200000);
+  assert.deepEqual(g.discard.at(-1), C(5, "♦"));
+  assert.equal(g.hands.flat().length, 7);
+  fails(() => apply(g, U[0], { type: "snap", owner: 0, card: g.hands[0][0].id, event }, 200001), "SNAP_CLOSED");
+  assert.equal(g.movements.at(-1).kind, "snap");
+});
+
+test("a drawn-card snap completes before final-turn scoring", () => {
+  for (const rank of [5, 4]) {
+    let g = fixture();
+    g.hands = [[S(3)], [S(rank), S(2)]];
+    g = apply(g, U[0], { type: "call" }, 2000);
+    g.deck.push(C(9), C(5));
+    g = apply(g, U[1], { type: "draw", source: "deck" }, 2001);
+    g = apply(g, U[1], { type: "snap-drawn", owner: 1, card: g.hands[1][0].id }, 2002);
+    assert.equal(g.phase, "round-end");
+    assert.deepEqual(g.result.raw, [3, rank === 5 ? 2 : 15]);
+    assert.deepEqual(g.movements.slice(-2).map((m) => m.kind), ["discard", rank === 5 ? "snap" : "penalty"]);
+  }
+});
+
+test("all physical moves are journaled for both seats and private flights contain no faces", () => {
+  let g = fixture();
+  assert.equal(g.movements[0].kind, "deal");
+  assert.equal(g.movements[0].moves.length, 9);
+  assert.ok(g.movements[0].moves.slice(0, 8).every((m) => !m.face));
+  g.hands[0][0].card = C(5);
+  g = drawPlay(g, C(5));
+  assert.deepEqual(g.movements.slice(-2).map((m) => m.kind), ["draw", "discard"]);
+  assert.ok(g.movements.at(-2).moves.every((m) => !m.face));
+  g = apply(g, U[1], { type: "snap", owner: 0, card: g.hands[0][0].id, event: g.snap.id }, 2100);
+  const passed = g.hands[1][0].id;
+  g = apply(g, U[1], { type: "transfer", card: passed }, 2200);
+  const transfer = g.movements.at(-1);
+  assert.equal(transfer.kind, "transfer");
+  assert.equal(transfer.moves[0].from.card, passed);
+  assert.notEqual(transfer.moves[0].to.card, passed);
+  assert.ok(!transfer.moves[0].face);
+  g.hands[0][0].card = C(3);
+  g = drawPlay(g, C(4), 3000);
+  g = apply(g, U[0], { type: "snap", owner: 0, card: g.hands[0][0].id, event: g.snap.id }, 4000);
+  assert.equal(g.movements.at(-1).kind, "penalty");
+  assert.ok(g.movements.at(-1).moves.every((m) => !m.face));
+  assert.deepEqual(view(g, U[0], 1, "ABCDEFGHJK", 4000).movements, view(g, U[1], 1, "ABCDEFGHJK", 4000).movements);
+  for (const event of g.movements) for (const move of event.moves)
+    if (move.face) assert.equal(move.to.zone, "discard", "only cards becoming public may carry faces");
+});
+
+test("recycling is animated before the next draw and changing the discard invalidates old snaps", () => {
+  let g = fixture();
+  g.deck = [];
+  g.discard = [C(2), C(3), C(4)];
+  g = apply(g, U[0], { type: "draw", source: "deck" }, 2000);
+  assert.deepEqual(g.movements.slice(-2).map((m) => m.kind), ["recycle", "draw"]);
+  assert.equal(g.movements.at(-2).moves.length, 2);
+  assert.ok(g.movements.at(-2).moves.every((m) => !m.face));
+  g = apply(g, U[0], { type: "discard" }, 2100);
+  const event = g.snap.id;
+  g = apply(g, U[1], { type: "draw", source: "discard" }, 2101);
+  assert.notEqual(g.snap.id, event);
+  fails(() => apply(g, U[0], { type: "snap", owner: 0, card: g.hands[0][0].id, event }, 2102), "SNAP_STALE");
+});
+
 test("draw and discard swaps publish the same public movement to both seats without hidden faces", () => {
   for (const source of ["deck", "discard"]) {
     let g = fixture();
@@ -345,40 +414,34 @@ test("drawn snap plays drawn special and removed special does not add an ability
   assert.equal(g.action.type, "peek-own");
   assert.equal(g.snap.winner.player, 0);
 });
-test("next player can snap before drawing; six-second window blocks draws and calls", () => {
+test("snaps never expire, and drawing or calling never waits for a snap window", () => {
   let g = fixture();
   g.hands[1][0].card = C(6);
   g = drawPlay(g, C(6));
   assert.equal(g.phase, "turn");
   assert.equal(g.turn, 1);
-  fails(
-    () => apply(g, U[1], { type: "draw", source: "deck" }, 7999),
-    "SNAP_WAIT",
-  );
-  fails(() => apply(g, U[1], { type: "call" }, 7999), "SNAP_WAIT");
+  assert.equal(apply(g, U[1], { type: "draw", source: "deck" }, 2001).phase, "drawn");
+  assert.equal(apply(g, U[1], { type: "call" }, 2001).caller, 1);
   const ownSnap = apply(
     g,
     U[1],
     { type: "snap", owner: 1, card: g.hands[1][0].id, event: g.snap.id },
-    2200,
+    62000,
   );
   assert.equal(ownSnap.hands[1].length, 3);
   assert.equal(ownSnap.turn, 1);
   const event = g.snap.id;
   g = apply(g, U[0], { type: "sync" }, 8000);
   assert.equal(g.turn, 1);
-  fails(
-    () =>
-      apply(
-        g,
-        U[1],
-        { type: "snap", owner: 1, card: g.hands[1][0].id, event },
-        8000,
-      ),
-    "SNAP_CLOSED",
-  );
   g = apply(g, U[1], { type: "draw", source: "deck" }, 8100);
-  assert.equal(g.snap, null);
+  assert.equal(g.snap.id, event, "a private draw must leave the public snap target open");
+  const drawn = g.drawn.card;
+  g = apply(g, U[0], { type: "snap", owner: 1, card: g.hands[1][0].id, event }, 100000);
+  assert.equal(g.phase, "transfer");
+  assert.deepEqual(g.drawn.card, drawn);
+  assert.equal(g.snap.winner.player, 0);
+  assert.deepEqual(g.discard.at(-1), C(6));
+  assert.ok(!view(g, U[0], 20, "ABCDEFGHJK").drawn.card);
 });
 for (const [a, b, expectedPenalty] of [
   [20, 10, 10],
@@ -395,7 +458,7 @@ for (const [a, b, expectedPenalty] of [
     assert.equal(g.turn, 1);
     fails(() => apply(g, U[1], { type: "call" }, 2000), "CALL");
     g = drawPlay(g, C(2), 3000);
-    assert.equal(g.phase, "settling");
+    assert.equal(g.phase, "round-end");
     g = apply(g, U[1], { type: "sync" }, 9000);
     assert.equal(g.phase, "round-end");
     assert.equal(g.result.penalty[0], expectedPenalty);
@@ -416,7 +479,7 @@ test("match thresholds, both exceed target, equality is draw, next round needs b
   g = apply(g, U[0], { type: "sync" }, 9000);
   assert.equal(g.result.matchOver, true);
   assert.equal(g.result.matchWinner, null);
-  fails(() => apply(g, U[0], { type: "next-round" }, 9000), "REVEALING");
+  fails(() => apply(g, U[0], { type: "next-round" }, 3001), "REVEALING");
   g = apply(g, U[0], { type: "next-round" }, 12000);
   assert.equal(g.phase, "round-end");
   g = apply(g, U[1], { type: "next-round" }, 12000);

@@ -81,6 +81,7 @@ export function createRoom(uid, target = 50) {
     nextReady: [false, false],
     result: null,
     motion: null,
+    movements: [],
     event: {
       id: crypto.randomUUID(),
       text: "Your private table is ready. Invite your partner.",
@@ -90,6 +91,15 @@ export function createRoom(uid, target = 50) {
 }
 function announce(g, text, now) {
   g.event = { id: crypto.randomUUID(), text, at: now };
+}
+const place = (zone, owner, card, index) => ({ zone, ...(owner === undefined ? {} : { owner, card, index }) });
+function movement(g, kind, moves, now, details = {}) {
+  const event = { id: crypto.randomUUID(), at: now, round: g.round, kind, moves, ...details };
+  // A short journal preserves fast successive actions between polling updates.
+  g.movements = [...(g.movements || []).filter((m) => now - m.at < 20000), event].slice(-32);
+}
+function openSnap(g) {
+  g.snap = g.discard.length ? { id: crypto.randomUUID(), card: g.discard.at(-1), winner: null, attempted: [] } : null;
 }
 export function startRound(g, now) {
   g.round++;
@@ -110,6 +120,13 @@ export function startRound(g, now) {
   g.nextReady = [false, false];
   g.result = null;
   g.motion = null;
+  g.movements = [];
+  movement(g, "deal", [
+    ...Array.from({ length: 4 }, (_, index) => [0, 1].map((owner) => ({
+      from: place("deck"), to: place("hand", owner, g.hands[owner][index].id, index),
+    }))).flat(),
+    { from: place("deck"), to: place("discard"), face: g.discard.at(-1) },
+  ], now);
   g.turnNumber = 0;
   announce(
     g,
@@ -117,11 +134,13 @@ export function startRound(g, now) {
     now,
   );
 }
-function take(g) {
+function take(g, now) {
   if (!g.deck.length && g.discard.length > 1) {
     const top = g.discard.pop();
+    const recycled = g.discard.length;
     g.deck = shuffled(g.discard);
     g.discard = [top];
+    movement(g, "recycle", Array.from({ length: recycled }, () => ({ from: place("discard"), to: place("deck") })), now);
   }
   need(g.deck.length, "DECK_EMPTY", "No cards remain to draw.");
   return g.deck.pop();
@@ -159,20 +178,11 @@ function settleRound(g, now) {
 }
 function finish(g, now) {
   if (g.action || g.transfer) return;
-  if (
-    (g.caller !== null || g.hands.some((h) => h.length === 0)) &&
-    g.snap &&
-    !g.snap.winner &&
-    now < g.snap.closesAt
-  ) {
-    g.phase = "settling";
-    return;
-  }
   if (g.caller !== null && g.turn !== g.caller) {
     settleRound(g, now);
     return;
   }
-  // Empty hands finish the round once mandatory actions and the snap window finish.
+  // No timed pause: score as soon as outstanding choices are complete.
   if (g.hands.some((h) => h.length === 0)) {
     settleRound(g, now);
     return;
@@ -192,16 +202,10 @@ function completeImpossibleAbility(g) {
         : g.hands.flat().length;
   if (n < (type === "blind-swap" ? 2 : 1)) g.action = null;
 }
-function played(g, card, p, now) {
+function played(g, card, p, now, deferFinish = false) {
   g.discard.push(card);
   g.drawn = null;
-  g.snap = {
-    id: crypto.randomUUID(),
-    card,
-    closesAt: now + 6000,
-    winner: null,
-    attempted: [],
-  };
+  openSnap(g);
   const type = ability(card);
   // No legal targets means an ability is automatically complete.
   const targets =
@@ -220,12 +224,14 @@ function played(g, card, p, now) {
     `Player ${p + 1} played ${face(card)}${g.action ? " · special ability" : ""}.`,
     now,
   );
-  finish(g, now);
+  if (!deferFinish) finish(g, now);
 }
 export function apply(input, uid, cmd, now = Date.now()) {
   const g = structuredClone(input),
     p = g.players.indexOf(uid),
     kind = cmd.type;
+  // Existing rooms can resume from an older untargeted discard or settling state.
+  if (!g.snap && g.discard.length && !["waiting", "initial", "round-end"].includes(g.phase)) openSnap(g);
   if (kind === "join") {
     if (p >= 0) return g;
     need(
@@ -267,6 +273,7 @@ export function apply(input, uid, cmd, now = Date.now()) {
     if (g.ready.every(Boolean)) {
       g.initial = [[], []];
       g.phase = "turn";
+      openSnap(g);
       announce(g, "Both players are ready. Let’s play.", now);
     }
     return g;
@@ -303,7 +310,9 @@ export function apply(input, uid, cmd, now = Date.now()) {
     const resume = g.transfer.resumePhase;
     const i = find(g, p, cmd.card),
       c = g.hands[p].splice(i, 1)[0];
-    g.hands[other(p)].push(slot(c.card));
+    const destination = slot(c.card);
+    g.hands[other(p)].push(destination);
+    movement(g, "transfer", [{ from: place("hand", p, c.id, i), to: place("hand", other(p), destination.id, g.hands[other(p)].length - 1) }], now, { player: p });
     g.transfer = null;
     completeImpossibleAbility(g);
     announce(g, `Player ${p + 1} passed a card face down.`, now);
@@ -327,9 +336,9 @@ export function apply(input, uid, cmd, now = Date.now()) {
       "That snap opportunity has passed.",
     );
     need(
-      !g.snap.winner && now < g.snap.closesAt,
+      !g.snap.winner,
       "SNAP_CLOSED",
-      "Another snap won, or the snap window closed.",
+      "This discard already had a successful snap.",
     );
     need(
       !g.snap.attempted.includes(p),
@@ -346,11 +355,9 @@ export function apply(input, uid, cmd, now = Date.now()) {
     g.snap.attempted.push(p);
     if (candidate.card.r === g.snap.card.r) {
       g.snap.winner = { player: p, at: now };
-      g.discard.splice(
-        g.discard.length - 1,
-        0,
-        g.hands[cmd.owner].splice(i, 1)[0].card,
-      );
+      const snapped = g.hands[cmd.owner].splice(i, 1)[0];
+      g.discard.push(snapped.card);
+      movement(g, "snap", [{ from: place("hand", cmd.owner, snapped.id, i), to: place("discard"), face: snapped.card }], now, { player: p });
       if (cmd.owner !== p) {
         g.transfer = { player: p, resumePhase: g.phase };
         g.phase = "transfer";
@@ -371,7 +378,9 @@ export function apply(input, uid, cmd, now = Date.now()) {
       )
         settleRound(g, now);
     } else {
-      g.hands[p].push(slot(take(g), now));
+      const penalty = slot(take(g, now), now);
+      g.hands[p].push(penalty);
+      movement(g, "penalty", [{ from: place("deck"), to: place("hand", p, penalty.id, g.hands[p].length - 1) }], now, { player: p });
       announce(g, `Player ${p + 1}: incorrect snap. +1 penalty card.`, now);
     }
     return g;
@@ -413,6 +422,10 @@ export function apply(input, uid, cmd, now = Date.now()) {
     const a = g.hands[cmd.a.owner][i],
       b = g.hands[cmd.b.owner][j];
     [a.card, b.card] = [b.card, a.card];
+    movement(g, "blind-swap", [
+      { from: place("hand", cmd.a.owner, a.id, i), to: place("hand", cmd.b.owner, b.id, j) },
+      { from: place("hand", cmd.b.owner, b.id, j), to: place("hand", cmd.a.owner, a.id, i) },
+    ], now, { player: p });
     g.motion = {
       id: crypto.randomUUID(),
       at: now,
@@ -434,13 +447,7 @@ export function apply(input, uid, cmd, now = Date.now()) {
       "CALL",
       "Call Cambio at the start of your turn.",
     );
-    need(
-      !g.snap || g.snap.winner || now >= g.snap.closesAt,
-      "SNAP_WAIT",
-      "Give both players the snap window first.",
-    );
     g.caller = p;
-    g.snap = null;
     g.turn = other(p);
     g.turnNumber++;
     announce(
@@ -452,11 +459,6 @@ export function apply(input, uid, cmd, now = Date.now()) {
   }
   if (kind === "draw") {
     need(g.phase === "turn", "PHASE", "Finish the current action first.");
-    need(
-      !g.snap || g.snap.winner || now >= g.snap.closesAt,
-      "SNAP_WAIT",
-      "Give both players the snap window first.",
-    );
     const source = cmd.source;
     need(
       ["deck", "discard"].includes(source),
@@ -466,13 +468,14 @@ export function apply(input, uid, cmd, now = Date.now()) {
     need(g.hands[p].length > 0, "EMPTY_HAND", "No cards remain in your hand.");
     if (source === "discard")
       need(g.discard.length, "DISCARD_EMPTY", "The discard pile is empty.");
-    // Drawing closes the preceding public snap event. A drawn rank stays private.
-    g.snap = null;
+    // Deck draws leave the public discard available for snapping.
     g.drawn = {
       player: p,
       source,
-      card: source === "deck" ? take(g) : g.discard.pop(),
+      card: source === "deck" ? take(g, now) : g.discard.pop(),
     };
+    if (source === "discard") openSnap(g);
+    movement(g, "draw", [{ from: place(source), to: place("drawn", p) }], now, { player: p, source });
     g.phase = "drawn";
     announce(g, `Player ${p + 1} drew from the ${source}.`, now);
     return g;
@@ -490,6 +493,10 @@ export function apply(input, uid, cmd, now = Date.now()) {
       g.hands[p][i].card = drawn.card;
       g.hands[p][i].penaltyUntil = 0;
       played(g, old, p, now);
+      movement(g, "draw-swap", [
+        { from: place("drawn", p), to: place("hand", p, g.hands[p][i].id, i) },
+        { from: place("hand", p, g.hands[p][i].id, i), to: place("discard"), face: old },
+      ], now, { player: p, source: drawn.source });
       // Public movement only: never put either hidden card's face in this record.
       g.motion = {
         id: crypto.randomUUID(),
@@ -508,18 +515,23 @@ export function apply(input, uid, cmd, now = Date.now()) {
     );
     if (kind === "discard") {
       played(g, drawn.card, p, now);
+      movement(g, "discard", [{ from: place("drawn", p), to: place("discard"), face: drawn.card }], now, { player: p });
       return g;
     }
     find(g, cmd.owner, cmd.card);
     // Explicit drawn snap deliberately plays the drawn card, including its ability.
     // The removed matching card never activates an ability.
-    played(g, drawn.card, p, now);
-    return apply(
+    // Complete the atomic snap before final-turn scoring can close the round.
+    played(g, drawn.card, p, now, true);
+    movement(g, "discard", [{ from: place("drawn", p), to: place("discard"), face: drawn.card }], now, { player: p });
+    const snapped = apply(
       g,
       uid,
       { type: "snap", owner: cmd.owner, card: cmd.card, event: g.snap.id },
       now,
     );
+    if (snapped.phase === "settling") finish(snapped, now);
+    return snapped;
   }
   throw new RuleError("ACTION", "Unknown game action.");
 }
@@ -570,7 +582,7 @@ export function view(g, uid, version, code, now = Date.now()) {
       ? {
           id: g.snap.id,
           card: g.snap.card,
-          closesAt: g.snap.closesAt,
+          closesAt: 0, // Compatibility for older clients: there is no waiting deadline.
           winner: g.snap.winner,
           tried: g.snap.attempted.includes(me),
         }
@@ -587,6 +599,7 @@ export function view(g, uid, version, code, now = Date.now()) {
     result: g.result,
     event: g.event,
     motion: g.motion || null,
+    movements: g.movements || [],
     serverNow: now,
   };
 }
